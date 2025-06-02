@@ -370,6 +370,53 @@ namespace ThiccTapeman.Input
     }
 
     // ------------------------------------ //
+    // Input Item class                     //
+    // ------------------------------------ //
+    #region Input Item class
+
+    public class InputItem
+    {
+        public InputAction inputAction;
+
+        private bool triggered;
+
+        public InputItem(InputAction inputAction)
+        {
+            this.inputAction = inputAction;
+        }
+
+        /// <summary>
+        /// Reads the value
+        /// </summary>
+        /// <typeparam name="T">The type of variable that should be read and returned</typeparam>
+        /// <returns>Returns the value in T</returns>
+        public T ReadValue<T>() where T : struct
+        {
+            return inputAction.ReadValue<T>();
+        }
+
+        /// <summary>
+        /// Makes buttons easier
+        /// </summary>
+        /// <returns>Returns true every other time it get's triggered</returns>
+        public bool GetTriggered(bool everyTime = false)
+        {
+            if (everyTime) return inputAction.triggered;
+
+            if (inputAction.triggered) triggered = !triggered;
+
+            if (triggered)
+            {
+                return inputAction.triggered;
+            }
+
+            return false;
+        }
+    }
+
+    #endregion
+
+    // ------------------------------------ //
     // ChangeBinding                        //
     // ------------------------------------ //
     #region ChangeBinding Class
