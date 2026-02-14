@@ -17,7 +17,7 @@ namespace ThiccTapeman.Input
     /// </code>
     /// </example>
     /// </summary>
-    public class InputManager
+    public class InputManager : MonoBehaviour
     {
         // ------------------------------------ //
         // Instance Handling                    //
@@ -25,7 +25,6 @@ namespace ThiccTapeman.Input
         #region Instance Handling
 
         private static InputManager instance;
-        private InputManagerMonoBehaviour inputSystemMonoBehaviour;
 
         /// <summary>
         /// Gets or creates a new instance for InputManager
@@ -33,20 +32,33 @@ namespace ThiccTapeman.Input
         /// <returns>The instance for InputManager</returns>
         public static InputManager GetInstance()
         {
-            if (instance == null) instance = new InputManager();
+            if (instance != null) return instance;
+
+            instance = FindFirstObjectByType<InputManager>();
+
+            if (instance != null) return instance;
+
+            GameObject gameObject = new GameObject("InputManager");
+            instance = gameObject.AddComponent<InputManager>();
 
             return instance;
         }
 
-        // Private constructor
-        private InputManager()
+        private void Awake()
         {
-            // Creates the InputManager object and attaches the monobehaviour script to it
-            GameObject gameObject = new GameObject("InputManager");
-            inputSystemMonoBehaviour = gameObject.AddComponent<InputManagerMonoBehaviour>();
+            if (instance != null && instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+
+            instance = this;
 
             inputActions = new Dictionary<string, InputItem>();
             tempInputActions = new Dictionary<string, InputItem>();
+
+            tempActions = new InputActionMap();
+            EnsureActionMapLoaded();
         }
 
         #endregion
@@ -56,12 +68,118 @@ namespace ThiccTapeman.Input
         #region
 
         public string actionMapPath = "Inputs/ControllScheme";
+        public InputActionAsset actions;
+        public InputActionMap tempActions;
+        [Header("Rebinding")]
+        [SerializeField] private bool autoLoadBindingOverrides = true;
+        [SerializeField] private string bindingOverridesKey = "InputManager.BindingOverrides";
+        public int deviceCheckIntervalFrames = 5;
+        public float defaultInputBufferSeconds = 0.2f;
+        public enum InputDeviceGroup
+        {
+            None,
+            KeyboardMouse,
+            Gamepad
+        }
 
         public void SetActionMapPath(string actionMapPath)
         {
             this.actionMapPath = actionMapPath;
 
-            inputSystemMonoBehaviour.LoadActionMap(actionMapPath);
+            LoadActionMap(actionMapPath);
+        }
+
+        private void EnsureActionMapLoaded()
+        {
+            if (actions == null)
+            {
+                LoadActionMap(actionMapPath);
+                return;
+            }
+
+            if (!loaded)
+            {
+                TriggerLoad();
+            }
+
+            EnableActions();
+        }
+
+        private void LoadActionMap(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                Debug.LogWarning("InputManager: Action map path is empty.");
+                return;
+            }
+
+            actions = Resources.Load<InputActionAsset>(path);
+            if (actions == null)
+            {
+                Debug.LogWarning($"InputManager: Could not load InputActionAsset at Resources path '{path}'.");
+                return;
+            }
+
+            TriggerLoad();
+            EnableActions();
+            if (autoLoadBindingOverrides)
+            {
+                LoadBindingOverrides();
+            }
+        }
+
+        private void OnEnable()
+        {
+            EnsureActionMapLoaded();
+        }
+
+        private void OnDisable()
+        {
+            if (actions != null) actions.Disable();
+            if (tempActions != null) tempActions.Disable();
+        }
+
+        private int deviceCheckFrameCounter;
+
+        private void Update()
+        {
+            deviceCheckFrameCounter++;
+            if (deviceCheckIntervalFrames > 1 && deviceCheckFrameCounter % deviceCheckIntervalFrames != 0)
+            {
+                return;
+            }
+
+            InputDevice newDevice = null;
+            InputDeviceGroup newGroup = InputDeviceGroup.None;
+
+            if (Gamepad.current != null && Gamepad.current.wasUpdatedThisFrame)
+            {
+                newDevice = Gamepad.current;
+                newGroup = InputDeviceGroup.Gamepad;
+            }
+            else if (Keyboard.current != null && Keyboard.current.wasUpdatedThisFrame)
+            {
+                newDevice = Keyboard.current;
+                newGroup = InputDeviceGroup.KeyboardMouse;
+            }
+            else if (Mouse.current != null && Mouse.current.wasUpdatedThisFrame)
+            {
+                newDevice = Mouse.current;
+                newGroup = InputDeviceGroup.KeyboardMouse;
+            }
+
+            if (newDevice != null && newGroup != lastInputDeviceGroup)
+            {
+                lastInputDevice = newDevice;
+                lastInputDeviceGroup = newGroup;
+                OnChangedInputDevice?.Invoke(newGroup);
+            }
+        }
+
+        private void EnableActions()
+        {
+            if (actions != null) actions.Enable();
+            if (tempActions != null) tempActions.Enable();
         }
 
         #endregion
@@ -78,8 +196,14 @@ namespace ThiccTapeman.Input
         /// <returns>The InputItem of that action</returns>
         public InputItem GetAction(string map, string action)
         {
+            if (actions == null)
+            {
+                Debug.LogWarning($"InputManager: Action map asset not loaded. Cannot get action '{map}/{action}'.");
+                return null;
+            }
+
             // Try's to find the action
-            InputAction inputAction = inputSystemMonoBehaviour.actions.FindAction(map + "/" + action);
+            InputAction inputAction = actions.FindAction(map + "/" + action);
 
             // There weren't an action there
             if (inputAction == null) return NoActionMapFound(map, action);
@@ -117,13 +241,17 @@ namespace ThiccTapeman.Input
         /// <returns>The newly created temporary action</returns>
         public InputItem GetTempAction(string action, string binding)
         {
+            if (tempActions == null) return null;
+            bool wasEnabled = tempActions.enabled;
+            if (wasEnabled) tempActions.Disable();
+
             // Try's to find the action
-            InputAction inputAction = inputSystemMonoBehaviour.tempActions.FindAction(action);
+            InputAction inputAction = tempActions.FindAction(action);
 
             if (inputAction == null)
             {
                 // Adds the action to the tempAction
-                inputAction = inputSystemMonoBehaviour.tempActions.AddAction(action, InputActionType.Value, binding);
+                inputAction = tempActions.AddAction(action, InputActionType.Value, binding);
 
                 inputAction.Enable();
             }
@@ -137,10 +265,12 @@ namespace ThiccTapeman.Input
 
                 AddToDictionary(action, inputItem, tempInputActions);
 
+                if (wasEnabled) tempActions.Enable();
                 return inputItem;
             }
 
             // Otherwise return the item it found
+            if (wasEnabled) tempActions.Enable();
             return inputItem;
         }
 
@@ -149,110 +279,125 @@ namespace ThiccTapeman.Input
             return loaded;
         }
 
+        public bool HasLoaded => loaded;
+
+        #endregion
+        // ------------------------------------ //
+        // Rebinding                            //
+        // ------------------------------------ //
+        #region Rebinding
+
+        private InputActionRebindingExtensions.RebindingOperation currentRebind;
+
+        public bool IsRebinding => currentRebind != null;
+
+        public bool StartRebind(string map, string action, int bindingIndex, Action<InputAction> onComplete = null, Action<InputAction> onCancel = null)
+        {
+            if (actions == null)
+            {
+                Debug.LogWarning("InputManager: Cannot rebind, action map asset not loaded.");
+                return false;
+            }
+
+            var inputAction = actions.FindAction(map + "/" + action);
+            if (inputAction == null)
+            {
+                Debug.LogWarning($"InputManager: Cannot rebind, action '{map}/{action}' not found.");
+                return false;
+            }
+
+            if (bindingIndex < 0 || bindingIndex >= inputAction.bindings.Count)
+            {
+                Debug.LogWarning($"InputManager: Binding index {bindingIndex} is out of range for '{map}/{action}'.");
+                return false;
+            }
+
+            CancelRebind();
+
+            inputAction.Disable();
+
+            currentRebind = inputAction.PerformInteractiveRebinding(bindingIndex)
+                .WithCancelingThrough("<Keyboard>/escape")
+                .OnCancel(operation =>
+                {
+                    operation.Dispose();
+                    currentRebind = null;
+                    inputAction.Enable();
+                    onCancel?.Invoke(inputAction);
+                })
+                .OnComplete(operation =>
+                {
+                    operation.Dispose();
+                    currentRebind = null;
+                    inputAction.Enable();
+                    SaveBindingOverrides();
+                    onComplete?.Invoke(inputAction);
+                });
+
+            currentRebind.Start();
+            return true;
+        }
+
+        public void CancelRebind()
+        {
+            if (currentRebind == null) return;
+            currentRebind.Cancel();
+            currentRebind.Dispose();
+            currentRebind = null;
+        }
+
+        public void SaveBindingOverrides()
+        {
+            if (actions == null) return;
+            string json = actions.SaveBindingOverridesAsJson();
+            PlayerPrefs.SetString(bindingOverridesKey, json);
+            PlayerPrefs.Save();
+        }
+
+        public void LoadBindingOverrides()
+        {
+            if (actions == null) return;
+            if (!PlayerPrefs.HasKey(bindingOverridesKey)) return;
+            string json = PlayerPrefs.GetString(bindingOverridesKey, string.Empty);
+            if (string.IsNullOrWhiteSpace(json)) return;
+            actions.LoadBindingOverridesFromJson(json);
+        }
+
+        public void ClearBindingOverrides()
+        {
+            if (actions == null) return;
+            actions.RemoveAllBindingOverrides();
+            PlayerPrefs.DeleteKey(bindingOverridesKey);
+        }
+
         #endregion
         // ------------------------------------ //
         // Mouse Position                       //
         // ------------------------------------ //
         public Vector3 GetMouseWorldPosition(LayerMask layerMask)
         {
-            if(HasDevice<Gamepad>())
+            if (HasDevice<Gamepad>())
             {
                 Vector2 mousePosition = new Vector2(Screen.width / 2, Screen.height / 2);
 
                 return Utils.MouseUtils.GetScreenToWorldPosition(mousePosition, Camera.main, layerMask);
-            } 
+            }
 
             return Utils.MouseUtils.GetScreenToWorldPosition(Mouse.current.position.value, Camera.main, layerMask);
         }
 
         private bool HasDevice<T>() where T : InputDevice
         {
-            if (inputSystemMonoBehaviour.actions.devices == null) return false;
+            if (actions.devices == null) return false;
 
-            for (int i = 0; i < inputSystemMonoBehaviour.actions.devices.Value.Count; i++)
+            for (int i = 0; i < actions.devices.Value.Count; i++)
             {
-                if (inputSystemMonoBehaviour.actions.devices.Value[i] is T) return true;
+                if (actions.devices.Value[i] is T) return true;
             }
 
             return false;
         }
 
-        // ------------------------------------ //
-        // Changing bindings                    //
-        // ------------------------------------ //
-        #region Changing Bindings
-
-        private InputActionRebindingExtensions.RebindingOperation rebindingAction;
-
-        public void ChangeBinding(BindingClass changeBinding, int bindingIndex, bool allCompositeParts = false)
-        {
-            rebindingAction?.Dispose();
-
-            void CleanUp()
-            {
-                rebindingAction?.Dispose();
-                rebindingAction = null;
-            }
-
-            InputAction inputAction = changeBinding.inputItem.inputAction;
-
-            inputAction.Disable();
-            changeBinding.OnStart();
-
-            rebindingAction = inputAction.PerformInteractiveRebinding(bindingIndex).WithCancelingThrough("<Keyboard>/escape").WithCancelingThrough("<Gamepad>/button south")
-            .OnCancel(operation =>
-            {
-                inputAction.Enable();
-                changeBinding.OnCancel();
-                CleanUp();
-            })
-            .OnComplete(operation =>
-            {
-                inputAction.Enable();
-
-                if(CheckDuplicateBindings(inputAction, bindingIndex, allCompositeParts))
-                {
-                    inputAction.RemoveBindingOverride(bindingIndex);
-                    CleanUp();
-                    ChangeBinding(changeBinding, bindingIndex, allCompositeParts);
-
-                    return;
-                }
-
-                changeBinding.OnChanged();
-
-                CleanUp();
-            });
-
-            changeBinding.OnEnd();
-        }
-
-        private bool CheckDuplicateBindings(InputAction action, int bindingIndex, bool allCompositeParts = false)
-        {
-            InputBinding newBinding = action.bindings[bindingIndex];
-
-            foreach(InputBinding binding in action.actionMap.bindings)
-            {
-                if (binding.action == newBinding.action) continue;
-
-                if (binding.effectivePath == newBinding.effectivePath) return true;
-            }
-
-            if(allCompositeParts )
-            {
-                for(int i = 1; i < bindingIndex; i++)
-                {
-                    if (action.bindings[i].effectivePath == newBinding.effectivePath)
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
-        }
-
-        #endregion
         // ------------------------------------ //
         // Dictionary Handling                  //
         // ------------------------------------ //
@@ -302,7 +447,7 @@ namespace ThiccTapeman.Input
             {
                 if (value == null) return;
 
-                if(loaded) value.Invoke();
+                if (loaded) value.Invoke();
 
                 _OnLoad += value;
             }
@@ -316,54 +461,14 @@ namespace ThiccTapeman.Input
 
         private event Action _OnLoad;
 
+        public event Action<InputDeviceGroup> OnChangedInputDevice;
+        private InputDevice lastInputDevice;
+        private InputDeviceGroup lastInputDeviceGroup = InputDeviceGroup.None;
+
         private void TriggerLoad()
         {
             loaded = true;
             _OnLoad?.Invoke();
-        }
-
-        #endregion
-        // ------------------------------------ //
-        // InputManager MonoBehaviour Class     //
-        // ------------------------------------ //
-        #region MonoBehaviour Class
-
-        public class InputManagerMonoBehaviour : MonoBehaviour
-        {
-            public InputActionAsset actions;
-            public InputActionMap tempActions;
-
-            private void Start()
-            {
-                // Creates a new acitonmap for the temporary actions
-                tempActions = new InputActionMap();
-
-                // Loads the preconfigured acitonmap
-                LoadActionMap(GetInstance().actionMapPath);
-            }
-
-            public void LoadActionMap(string path)
-            {
-                actions = Resources.Load<InputActionAsset>(path);
-
-                // Invokes the InputManagers onLoad
-                InputManager instance = GetInstance();
-                instance.TriggerLoad();
-
-                OnEnable();
-            }
-
-            private void OnEnable()
-            {
-                if(actions != null) actions.Enable();
-                if(tempActions != null) tempActions.Enable();
-            }
-
-            private void OnDisable()
-            {
-                if(actions != null) actions.Disable();
-                if(tempActions != null) tempActions.Disable();
-            }
         }
 
         #endregion
@@ -377,12 +482,27 @@ namespace ThiccTapeman.Input
     public class InputItem
     {
         public InputAction inputAction;
-
-        private bool triggered;
+        private float lastTriggeredTime = -999f;
+        private bool hasBufferedTrigger;
+        private object bufferedValue;
+        private float bufferSecondsOverride = -1f;
+        private readonly InputManager inputManager;
 
         public InputItem(InputAction inputAction)
         {
             this.inputAction = inputAction;
+            inputManager = Application.isPlaying ? InputManager.GetInstance() : null;
+            if (this.inputAction != null)
+            {
+                this.inputAction.performed += OnPerformed;
+            }
+        }
+
+        private void OnPerformed(InputAction.CallbackContext context)
+        {
+            lastTriggeredTime = Time.time;
+            hasBufferedTrigger = true;
+            bufferedValue = context.ReadValueAsObject();
         }
 
         /// <summary>
@@ -398,63 +518,76 @@ namespace ThiccTapeman.Input
         /// <summary>
         /// Makes buttons easier
         /// </summary>
-        /// <returns>Returns true every other time it get's triggered</returns>
-        public bool GetTriggered(bool everyTime = false)
+        /// <returns>Returns true every time it get's triggered</returns>
+        public bool Triggered(bool everyTime = false)
         {
-            if (everyTime) return inputAction.triggered;
+            return inputAction.triggered;
+        }
 
-            if (inputAction.triggered) triggered = !triggered;
+        /// <summary>
+        /// Returns true if the action was triggered within the buffer window.
+        /// Consumes the buffered trigger on success or when it expires.
+        /// </summary>
+        public bool BufferedTriggered(float bufferSeconds)
+        {
+            if (!hasBufferedTrigger) return false;
 
-            if (triggered)
+            if (Time.time - lastTriggeredTime <= bufferSeconds)
             {
-                return inputAction.triggered;
+                hasBufferedTrigger = false;
+                return true;
             }
 
+            hasBufferedTrigger = false;
             return false;
         }
+
+        public bool BufferedTriggered()
+        {
+            return BufferedTriggered(GetBufferSeconds());
+        }
+
+        /// <summary>
+        /// Lets you read from the buffer instead.
+        /// </summary>
+        /// <typeparam name="T">The type of variable that should be read and returned</typeparam>
+        /// <returns>Returns the value in T</returns>
+        public T ReadBuffer<T>() where T : struct
+        {
+            if (!hasBufferedTrigger) return default;
+
+            if (Time.time - lastTriggeredTime > GetBufferSeconds())
+            {
+                hasBufferedTrigger = false;
+                bufferedValue = null;
+                return default;
+            }
+
+            hasBufferedTrigger = false;
+
+            if (bufferedValue is T value)
+            {
+                bufferedValue = null;
+                return value;
+            }
+
+            bufferedValue = null;
+            return default;
+        }
+
+        public void SetBufferSeconds(float bufferSeconds)
+        {
+            bufferSecondsOverride = Mathf.Max(0f, bufferSeconds);
+        }
+
+        private float GetBufferSeconds()
+        {
+            if (bufferSecondsOverride >= 0f) return bufferSecondsOverride;
+            if (inputManager != null) return inputManager.defaultInputBufferSeconds;
+            return 0f;
+        }
     }
 
     #endregion
 
-    // ------------------------------------ //
-    // ChangeBinding                        //
-    // ------------------------------------ //
-    #region ChangeBinding Class
-
-    public class BindingClass
-    {
-        public event Action OnStartChangeBinding;
-        public event Action OnBindingChanged;
-        public event Action OnEndChangeBinding;
-        public event Action OnCanceledChangeBinding;
-
-        public InputItem inputItem;
-
-        public BindingClass(InputItem inputItem)
-        {
-            this.inputItem = inputItem;
-        }
-
-        public void OnStart()
-        {
-            if(OnStartChangeBinding != null) OnStartChangeBinding();
-        }
-
-        public void OnChanged()
-        {
-            if (OnBindingChanged != null) OnBindingChanged();
-        }
-
-        public void OnEnd()
-        {
-            if (OnEndChangeBinding != null) OnEndChangeBinding();
-        }
-
-        public void OnCancel()
-        {
-            if (OnCanceledChangeBinding != null) OnCanceledChangeBinding();
-        }
-    }
-
-    #endregion
 }

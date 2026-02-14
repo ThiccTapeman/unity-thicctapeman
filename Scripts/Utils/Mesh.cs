@@ -152,7 +152,7 @@ namespace ThiccTapeman.Utils
         // Method to find the intersection of an edge with the cutout bounding box
         private static Vector3 FindIntersection(Vector3 p1, Vector3 p2, Vector3 min, Vector3 max)
         {
-            // Logic to find the intersection point between p1-p2 and the bounding box (min, max)
+            // Logic to find the intersection point between handleA-handleB and the bounding box (min, max)
             // This involves solving for intersections of the line segment with each box face
 
             // For simplicity, we can approximate by interpolating along each axis individually

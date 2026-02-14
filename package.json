@@ -1,13 +1,12 @@
 {
     "name": "com.thicctapeman.unity",
-    "version": "1.0.5",
+    "version": "1.0.6",
     "displayName": "ThiccTapeman Unity",
     "description": "A description of what the package does.",
-    "unity": "2021.3",
+    "unity": "6000.3.3f1",
     "dependencies": {},
-
     "repository": {
-        "url": "https://github.com/thicctapeman-dev/unity-thicctapeman.git",
+        "url": "https://github.com/thicctapeman/thicctapeman.git",
         "type": "git"
     }
 }
